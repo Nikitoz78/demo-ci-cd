@@ -1,0 +1,186 @@
+
+
+<<Install Kubernetes Cluster using kubeadm on CentOS 7 Virtual machines>>
+
+cat >>/etc/hosts<<EOF
+192.168.1.90 kmaster.example.com kmaster
+192.168.1.91 kworker1.example.com kworker1
+192.168.1.91 kworker2.example.com kworker2
+192.168.1.99 nfs.example.com nfs
+EOF
+
+yum -y install nfs-utils nfs-utils-lib net-tools
+yum install -y -q yum-utils device-mapper-persistent-data lvm2
+yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+yum install -y -q docker-ce
+
+systemctl enable docker
+systemctl start docker
+systemctl status docker
+
+setenforce 0
+sed -i --follow-symlinks 's/^SELINUX=enforcing/SELINUX=disabled/' /etc/sysconfig/selinux
+
+systemctl disable firewalld
+systemctl stop firewalld
+
+sed -i '/swap/d' /etc/fstab
+swapoff -a
+
+cat >>/etc/sysctl.d/kubernetes.conf<<EOF
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+EOF
+sysctl --system
+
+cat >>/etc/yum.repos.d/kubernetes.repo<<EOF
+[kubernetes]
+name=Kubernetes
+baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
+        https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+EOF
+
+yum install -y kubeadm kubelet kubectl
+systemctl enable kubelet
+systemctl start kubelet
+systemctl status kubelet
+
+ --- kmaster ---
+kubeadm init --apiserver-advertise-address=192.168.1.90 --pod-network-cidr=172.16.0.0/16
+mkdir /home/nikitoz/.kube
+cp /etc/kubernetes/admin.conf /home/nikitoz/.kube/config
+chown -R nikitoz:nikitoz /home/nikitoz/.kube
+
+from USER
+sudo wget https://docs.projectcalico.org/v3.11/manifests/calico.yaml   or   https://github.com/Nikitoz78/playjenkins/tree/master/config
+192.168.0.0/16 -> 172.16.0.0/16   calico.yaml
+kubectl create -f calico.yaml
+
+kubeadm token create --print-join-command  ->  input kworkers
+
+kubectl get nodes
+kubectl get cs
+kubectl cluster-info
+	
+---------------------------------------------------------------
+
+--- NFS server ---
+sudo mkdir /srv/nfs/kubedata -p
+sudo chown nobody: /srv/nfs/kubedata
+yum -y install nfs-utils nfs-utils-lib net-tools
+systemctl enable rpcbind
+systemctl enable nfs-server
+systemctl enable nfs-lock
+systemctl enable nfs-idmap
+systemctl start rpcbind
+systemctl start nfs-server
+systemctl start nfs-lock
+systemctl start nfs-idmap
+mcedit /etc/exports
+	/srv/nfs/kubedata *(rw,sync,no_subtree_check,no_root_squash,no_all_squash,insecure) - > /etc/exports
+exportfs -rav
+exportfs -v
+
+For cluster servers:
+yum install nfs-utils nfs-utils-lib net-tools
+systemctl enable rpcbind
+systemctl enable nfs-server
+systemctl enable nfs-lock
+systemctl enable nfs-idmap
+systemctl start rpcbind
+systemctl start nfs-server
+systemctl start nfs-lock
+systemctl start nfs-idmap
+mount -t nfs 192.168.1.99:/srv/nfs/kubedata /mnt
+mount | grep kubedata
+umount /mnt
+
+sudo wget https://github.com/Nikitoz78  nfs-provisioner
+kubectl create -f rbac.yaml
+kubectl create -f default-sc.yaml
+kubectl create -f deployment.yaml
+kubectl get all
+
+---------------------------------------------------------------
+
+--- Install helm 2 ---
+
+wget https://get.helm.sh/helm-v2.16.7-linux-amd64.tar.gz
+tar zxf helm*gz
+sudo cp linux-amd64/helm /usr/local/bin/
+rm -rf helm* linux-amd64
+kubectl -n kube-system create serviceaccount tiller
+kubectl create clusterrolebinding tiller --clusterrole cluster-admin --serviceaccount=kube-system:tiller
+kubectl get clusterrolebinding tiller
+helm init --service-account tiller
+kubectl -n kube-system get pods
+
+--- Install helm 3 ---
+wget https://get.helm.sh/helm-v3.2.1-linux-amd64.tar.gz
+tar zxf helm*gz
+sudo cp linux-amd64/helm /usr/local/bin/
+helm version
+helm repo add stable https://kubernetes-charts.storage.googleapis.com/
+helm search repo stable
+helm repo update
+
+---------------------------------------------------------------
+
+--- DOCKER Registry ---
+docker run -d -p 5000:5000 --restart=always --name registry -v docker:/var/lib/registry registry:2
+netstat -nlt -> port 5000
+docker volume ls  - > local   docker
+
+telnet 127.0.0.1 5000
+	docker pull nginx
+	docker tag nginx 192.168.1.99:5000/nginx
+	docker push 192.168.1.99:5000/nginx
+-----
+For cluster servers:
+ls -l /var/run/docker.sock
+chmod 666 /var/run/docker.sock
+vi /etc/docker/daemon.json
+	{
+	  "insecure-registeries": ["192.168.1.99:5000"]
+	 }
+systemctl restart docker
+
+-----------------------------------------------------------------
+
+--- Jenkins ---
+helm search jenkins
+helm inspect values stable/jenkins > /tmp/jenkins-value.yaml
+
+adminPassword: "admin"
+serviceType: NodePort
+nodePort: 32323
+installPlugins:
+    - kubernetes:1.25.3
+    - workflow-job:2.38
+    - workflow-aggregator:2.6
+    - credentials-binding:1.21
+    - git:4.2.2
+    - configuration-as-code:1.39
+    - blueocean:1.23.1
+    - kubernetes-cd:2.3.0
+agent:
+  enabled: true
+  image: "joao29a/jnlp-slave-alpine-docker"
+  tag: "latest"
+volumes:
+    - type: HostPath
+      hostPath: /var/run/docker.sock
+      mountPath: /var/run/docker.sock
+
+kubectl create namespace jenkins
+kubectl get ns
+
+helm install stable/jenkins --name jenkins --values /tmp/jenkins-value.yaml --namespace jenkins
+kubectl -n jenkins get all 
+kubectl -n jenkins logs -f <POD>
+kubectl get pods -w --namespace jenkins
+kubectl describe pod <POD> --namespace jenkins
