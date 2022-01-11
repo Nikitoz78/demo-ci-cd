@@ -2,9 +2,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: web-deployment
   labels:
     app: web
-  name: web
 spec:
   replicas: 1
   selector:
@@ -15,11 +15,10 @@ spec:
       labels:
         app: web
     spec:
-      containers:
-      - image: 192.168.1.99:5000/test:1
-        imagePullPolicy: Always
-        name: web
-
+        containers:
+        - image: 172.42.42.200:5000/demo:1
+          imagePullPolicy: Always
+          name: web
 ---
 apiVersion: v1
 kind: Service
