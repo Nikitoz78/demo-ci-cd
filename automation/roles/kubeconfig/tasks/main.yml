@@ -1,0 +1,6 @@
+---
+- name: Copy kubeconfig to localhost
+  ansible.builtin.fetch:
+    src: ~/.kube/config
+    dest: ~/.kube/
+    flat: yes

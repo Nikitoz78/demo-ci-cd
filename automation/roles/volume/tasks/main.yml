@@ -1,0 +1,12 @@
+---
+- name: Create Jenkins namespace
+  shell: "kubectl create namespace jenkins"
+
+- name: Create StorageClass
+  shell: "kubectl create -f /vagrant/jenkins/jenkins-sc.yaml"
+
+- name: Create PersistentVolume
+  shell: "kubectl create -f /vagrant/jenkins/jenkins-pv.yaml"
+
+- name: Create PersistentVolumeClaim
+  shell: "kubectl create -f /vagrant/jenkins/jenkins-pvc.yaml"
